@@ -1,0 +1,25 @@
+# 讓 GitHub 自動幫你追蹤相依套件與 Actions 的更新。
+#
+# workflow 裡的 actions 是用 commit SHA 釘死的（防止 tag 被偷偷改指向），
+# Dependabot 認得這種寫法，會連同後面的 # v4.4.0 註解一起更新，
+# 所以你不會因為釘死而錯過安全性修補。
+#
+# 收到 PR 之後，記得手動跑一次「🧪 E5 測試模式」再合併。
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(actions)"
+    labels: ["dependencies"]
+
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    labels: ["dependencies"]
