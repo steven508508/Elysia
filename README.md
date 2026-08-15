@@ -9,6 +9,7 @@
   <img alt="GitHub Actions" src="https://img.shields.io/badge/GitHub_Actions-2088FF?logo=githubactions&logoColor=white">
   <img alt="Telegram" src="https://img.shields.io/badge/Telegram-26A5E4?logo=telegram&logoColor=white">
   <img alt="相依套件 3 個" src="https://img.shields.io/badge/相依套件-3%20個-success">
+  <img alt="version 1.5.0" src="https://img.shields.io/badge/version-1.5.0-blue">
 </p>
 
 ---
@@ -28,6 +29,8 @@
 - [檔案結構](#檔案結構)
 - [安全性](#安全性)
 
+新手請先看 **[安裝教學.md](安裝教學.md)**，版本差異看 **[CHANGELOG.md](CHANGELOG.md)**。
+
 ---
 
 ## 特色
@@ -40,6 +43,7 @@
 | 🔑 **雙認證模式** | 委派權限（refresh token）與應用程式權限（client credentials）都支援，可混用 |
 | 🔄 **Token 自動續命** | Microsoft 輪換 refresh token 後，自動加密回寫 GitHub Secret，不用手動維護 |
 | 🎲 **行為隨機化** | 每次隨機抽 8–15 個 API、隨機順序、隨機間隔、每天執行時刻也隨機 |
+| 👥 **帳號管理** | 停用／啟用／改名／移除單一帳號，不用重新授權其他帳號 |
 | ⏳ **到期倒數提醒** | 自動抓訂閱剩餘天數，30／14／7／3／1 天時重點提醒 |
 | 📈 **每週統計** | 成功率、最常失敗的 API、token 輪換次數，每週一自動推送 |
 | 📝 **歷史紀錄** | 每次執行寫回 repo，順帶讓 GitHub 不會因為「60 天沒動靜」停用排程 |
@@ -382,7 +386,11 @@ curl -X POST https://api.github.com/repos/<你的帳號>/<repo>/dispatches \
 | `/check all` | 只驗證 token 與權限，不實際呼叫（dry-run） |
 | `/run` | 立刻執行一次正常保活（隨機抽 API） |
 | `/status` | 查看最後一次執行結果 |
-| `/list` | 列出所有帳號 |
+| `/list` | 列出所有帳號與啟用狀態 |
+| `/disable <帳號>` | 暫停該帳號的保活，但保留 token |
+| `/enable <帳號>` | 恢復保活 |
+| `/rename <舊別名> <新別名>` | 改顯示名稱 |
+| `/remove <帳號> confirm` | 移除帳號（**不可復原**，需加 confirm） |
 | `/report` | 立刻產生一份統計報告 |
 | `/help` | 指令說明 |
 | `/ping` | 確認精靈還活著 |
@@ -642,6 +650,7 @@ python tools/selftest_privacy.py       # 離線模擬：公開日誌與公開檔
 e5-keeper/
 ├── .github/workflows/
 │   ├── authorize.yml         # 🔑 雲端授權，不需要本機環境
+│   ├── accounts.yml          # 👥 帳號管理（列出／停用／移除／改名）
 │   ├── keepalive.yml         # 🛡️ 每天 3 次保活（cron + 隨機延遲）
 │   ├── test-run.yml          # 🧪 測試模式（手動 / repository_dispatch）
 │   ├── telegram-poller.yml   # 🤖 每 5 分鐘收 Telegram 指令
@@ -649,6 +658,7 @@ e5-keeper/
 ├── e5keeper/
 │   ├── main.py               # 指令列進入點
 │   ├── config.py             # 設定與帳號載入
+│   ├── accounts.py           # 帳號管理
 │   ├── auth.py               # 取得 access token（雙模式）
 │   ├── device_auth.py        # 雲端裝置碼授權
 │   ├── apis.py               # Graph API 目錄（52 個端點）★ 想加 API 改這裡
