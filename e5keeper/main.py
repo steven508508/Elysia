@@ -190,6 +190,26 @@ def cmd_authorize(args) -> int:
     )
 
 
+def cmd_accounts(args) -> int:
+    from . import accounts as acct
+
+    settings = load_settings(allow_empty_accounts=True)
+    changed, message = acct.apply_action(
+        settings,
+        action=args.action,
+        target=(args.account or "").strip(),
+        new_alias=(args.new_alias or "").strip(),
+        confirm=args.confirm,
+    )
+    # 純文字版印在日誌，HTML 版送 Telegram
+    print(notify._strip_tags(message), flush=True)
+    if settings.telegram_token:
+        notify.send_text(settings, message)
+    if args.action == "list":
+        return 0
+    return 0 if changed else 1
+
+
 def cmd_poll(_args) -> int:
     from .telegram_poll import poll
 
@@ -322,6 +342,15 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--no-replace", dest="replace", action="store_false",
                    help="同一個 email 已存在時中止，不覆寫")
     a.set_defaults(func=cmd_authorize)
+
+    ac = sub.add_parser("accounts", help="帳號管理：列出／停用／啟用／移除／改名")
+    ac.add_argument("--action", required=True,
+                    choices=["list", "enable", "disable", "remove", "rename"])
+    ac.add_argument("--account", default="", help="別名 / email / 序號")
+    ac.add_argument("--new-alias", default="", help="改名時的新別名")
+    ac.add_argument("--confirm", action="store_true",
+                    help="移除、或停用最後一個帳號時必須加上")
+    ac.set_defaults(func=cmd_accounts)
 
     pl = sub.add_parser("poll", help="收取並執行 Telegram 指令")
     pl.set_defaults(func=cmd_poll)
