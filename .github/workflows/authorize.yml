@@ -1,0 +1,94 @@
+name: 🔑 授權帳號（不需要本機環境）
+
+# 在 GitHub 上完成 Microsoft 裝置碼授權，全程不用碰自己的電腦。
+#
+#   1. 按下 Run workflow
+#   2. Telegram 會收到「網址 + 代碼」
+#   3. 你在手機或瀏覽器上登入並同意
+#   4. 拿到的 refresh token 直接加密寫進 E5_ACCOUNTS Secret
+#
+# 🔒 refresh token 完全不會出現在 Actions 日誌或 Telegram 訊息裡。
+#    公開 repo 的執行日誌是所有人都看得到的，所以這支程式一行都不會印它。
+#    也因為如此，這個 workflow 一定要有 GH_PAT（需 Secrets 讀寫權限）才能執行。
+
+on:
+  workflow_dispatch:
+    inputs:
+      alias:
+        description: '帳號別名（通知裡會顯示，例如 E5-主帳號）'
+        required: true
+        default: 'E5-主帳號'
+        type: string
+      client_id:
+        description: 'Azure 應用程式的用戶端 ID（Application ID）'
+        required: true
+        type: string
+      expect:
+        description: '預期登入的帳號（建議填！登入的不是這個帳號就中止）'
+        required: false
+        default: ''
+        type: string
+      tenant:
+        description: '租用戶（個人自建的 E5 保持 common 即可）'
+        required: false
+        default: 'common'
+        type: string
+      replace:
+        description: '同一個帳號已存在時覆寫掉'
+        required: false
+        default: true
+        type: boolean
+
+# 只讀就好 —— 這個 workflow 不寫 repo，只寫 Secret（那是靠 GH_PAT）
+permissions:
+  contents: read
+
+concurrency:
+  group: e5keeper-authorize
+  cancel-in-progress: true
+
+jobs:
+  authorize:
+    name: 裝置碼授權
+    runs-on: ubuntu-latest
+    timeout-minutes: 20      # 代碼有效期約 15 分鐘，留一點餘裕
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 安裝 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安裝相依套件
+        run: pip install --quiet -r requirements.txt
+
+      - name: 開始授權
+        env:
+          E5_ACCOUNTS: ${{ secrets.E5_ACCOUNTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          IN_ALIAS: ${{ github.event.inputs.alias }}
+          IN_CLIENT_ID: ${{ github.event.inputs.client_id }}
+          IN_TENANT: ${{ github.event.inputs.tenant }}
+          IN_REPLACE: ${{ github.event.inputs.replace }}
+          IN_EXPECT: ${{ github.event.inputs.expect }}
+        run: |
+          set -euo pipefail
+          ARGS=(authorize
+                --alias "${IN_ALIAS:-E5-主帳號}"
+                --client-id "${IN_CLIENT_ID}"
+                --tenant "${IN_TENANT:-common}")
+          if [ -n "${IN_EXPECT:-}" ]; then ARGS+=(--expect "$IN_EXPECT"); fi
+          if [ "${IN_REPLACE:-true}" != "true" ]; then ARGS+=(--no-replace); fi
+          python -m e5keeper "${ARGS[@]}"
+
+      - name: 提示
+        if: always()
+        run: |
+          echo "授權的網址與代碼只會送到你的 Telegram —— 這份日誌是公開的，"
+          echo "所以代碼刻意不印在這裡，避免被別人搶去兌換。"
+          echo "成功的話，下一步請執行「🧪 E5 測試模式」確認一切正常。"
