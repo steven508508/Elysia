@@ -48,16 +48,40 @@ HELP = """🤖 <b>E5 保活精靈 · 指令說明</b>
 <code>/help</code>　顯示這則說明
 
 <i>帳號可以用別名、email 或清單上的序號指定。
-指令最多 5 分鐘內會被處理（輪詢間隔）。</i>"""
+指令通常 5 分鐘內會被處理；GitHub 排程尖峰時可能更久。</i>"""
 
 
-# ══════════════════ offset 狀態 ══════════════════
+# ══════════════════ 狀態檔 ══════════════════
+#
+# state/telegram_offset.json 長這樣：
+#   {"offset": 106, "attempts": {"107": 1}}
+#
+# offset   = 已經「執行完成」的最大 update_id
+# attempts = 正在嘗試中的 update_id 各試了幾次
+#
+# 為什麼要記 attempts：位移必須等指令**跑完**才能推進，否則 job 中途掛掉
+# （逾時、runner 異常、被取消）那條指令就永久消失了。但只是單純「跑完才推進」
+# 又會有另一個風險：某條指令若每次都把 job 弄死，就會無限重試。
+# 所以先記下嘗試次數並提交，跑完再推進位移；同一條試超過上限就跳過它。
+
+MAX_ATTEMPTS = 3
+
+
+def _load_state() -> dict:
+    try:
+        data = json.loads(OFFSET_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            return {"offset": 0, "attempts": {}}
+        data.setdefault("offset", 0)
+        raw = data.get("attempts")
+        data["attempts"] = raw if isinstance(raw, dict) else {}
+        return data
+    except Exception:  # noqa: BLE001
+        return {"offset": 0, "attempts": {}}
+
 
 def _load_offset() -> int:
-    try:
-        return int(json.loads(OFFSET_FILE.read_text(encoding="utf-8")).get("offset", 0))
-    except Exception:  # noqa: BLE001
-        return 0
+    return int(_load_state().get("offset", 0))
 
 
 def _allowed_senders(settings: Settings) -> set[str]:
@@ -78,11 +102,17 @@ def _allowed_senders(settings: Settings) -> set[str]:
     return extra
 
 
-def _save_offset(value: int) -> None:
+def _save_state(offset: int, attempts: dict | None = None) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
+    payload = {"offset": int(offset), "attempts": {str(k): int(v)
+                                                   for k, v in (attempts or {}).items()}}
     OFFSET_FILE.write_text(
-        json.dumps({"offset": value}, ensure_ascii=False) + "\n", encoding="utf-8"
+        json.dumps(payload, ensure_ascii=False) + "\n", encoding="utf-8"
     )
+
+
+def _save_offset(value: int) -> None:
+    _save_state(value)
 
 
 # ══════════════════ 主流程 ══════════════════
@@ -92,7 +122,9 @@ def poll(settings: Settings) -> int:
         log("未設定 Telegram，無法輪詢指令", level="warn")
         return 0
 
-    offset = _load_offset()
+    state = _load_state()
+    offset = int(state.get("offset", 0))
+    attempts: dict = dict(state.get("attempts") or {})
     url = f"{notify.API_ROOT}/bot{settings.telegram_token}/getUpdates"
     params = {"timeout": 0, "allowed_updates": json.dumps(["message"])}
     if offset:
@@ -123,17 +155,20 @@ def poll(settings: Settings) -> int:
 
     log(f"收到 {len(updates)} 筆更新")
     highest = offset
-    commands: list[tuple[str, list[str], str]] = []
+    commands: list[dict] = []
     rejected = 0
+    poisoned: list[str] = []
     allowed_senders = _allowed_senders(settings)
 
     for upd in updates:
-        highest = max(highest, int(upd.get("update_id", 0)))
+        uid = int(upd.get("update_id", 0))
+        highest = max(highest, uid)
         msg = upd.get("message") or {}
         chat_id = str((msg.get("chat") or {}).get("id", ""))
         sender_id = str((msg.get("from") or {}).get("id", ""))
         text = (msg.get("text") or "").strip()
         sender = (msg.get("from") or {}).get("username") or sender_id or "?"
+        sent_at = int(msg.get("date", 0) or 0)
 
         # 兩道獨立的檢查：對話要對，「送訊息的人」也要對。
         # 只檢查 chat_id 的話，一旦 TELEGRAM_CHAT_ID 設成群組，
@@ -153,40 +188,86 @@ def poll(settings: Settings) -> int:
         if not text.startswith("/"):
             continue
 
+        # 這條指令已經害 job 掛過太多次了，跳過它，免得永遠卡在這裡
+        if attempts.get(str(uid), 0) >= MAX_ATTEMPTS:
+            poisoned.append(text.split()[0])
+            log(f"update {uid} 已嘗試 {attempts[str(uid)]} 次仍未完成，跳過", level="warn")
+            continue
+
         parts = text.split()
-        cmd = parts[0].lstrip("/").split("@")[0].lower()
-        commands.append((cmd, parts[1:], sender))
+        commands.append({
+            "uid": uid,
+            "cmd": parts[0].lstrip("/").split("@")[0].lower(),
+            "argv": parts[1:],
+            "sender": sender,
+            "sent_at": sent_at,
+        })
+
+    if poisoned:
+        send_text(settings, "⚠️ <b>以下指令連續失敗，已略過</b>\n"
+                            + "\n".join(f"<code>{e(p)}</code>" for p in poisoned)
+                            + "\n\n請到 Actions 看日誌找原因，或直接用網頁手動執行。")
 
     if not commands:
         # 只有陌生人來訊時，絕對不能提交 —— 否則任何知道 bot 名稱的人
         # 每 5 分鐘傳一則訊息，就能在你的公開 repo 灌進一整天的 commit，
         # 而且因為優先使用 GH_PAT，那些 commit 會掛在你名下。
         # 位移只存在本機，下一輪重讀舊值最多就是再忽略一次，沒有副作用。
-        _save_offset(highest)
-        log(f"沒有需要處理的指令" + (f"（忽略了 {rejected} 則未授權訊息）" if rejected else ""))
+        _save_state(highest, attempts)
+        log("沒有需要處理的指令" + (f"（忽略了 {rejected} 則未授權訊息）" if rejected else ""))
         return 0
 
-    # 有真正要執行的指令才寫回 offset，避免執行失敗時下次重跑同一條
-    _save_offset(highest)
-    if not history.commit_and_push(
-        "chore(e5keeper): 更新 Telegram 指令位移",
+    # ── 第一階段：先把「我要開始跑這幾條了」記下來並提交 ──
+    # 這樣就算 job 待會兒整個掛掉，下一輪也知道這些指令試過幾次。
+    for item in commands:
+        attempts[str(item["uid"])] = attempts.get(str(item["uid"]), 0) + 1
+    _save_state(offset, attempts)
+    history.commit_and_push(
+        "chore(e5keeper): 記錄指令執行嘗試",
         ["state"],
-        rewrite=lambda: _save_offset(highest),
-    ):
-        log("位移沒能存回 repo，下一輪可能會重跑同一條指令", level="warn")
+        rewrite=lambda: _save_state(offset, attempts),
+    )
 
-    for cmd, argv, sender in commands:
+    # ── 第二階段：執行 ──
+    for item in commands:
+        cmd, argv, sender = item["cmd"], item["argv"], item["sender"]
         log(f"執行指令 /{cmd} {' '.join(argv)}（來自 {sender}）")
         try:
-            _dispatch(settings, cmd, argv, sender)
+            _dispatch(settings, cmd, argv, sender, waited=_waited_seconds(item["sent_at"]))
         except Exception as exc:  # noqa: BLE001
             log(f"指令執行失敗：{exc}", level="err")
             send_text(settings, f"❌ 指令 <code>/{e(cmd)}</code> 執行失敗\n"
-                                f"<code>{e(f'{exc.__class__.__name__}: {exc}')}</code>")
+                                f"<code>{e(f'{exc.__class__.__name__}: {exc}')}</code>\n"
+                                f"<i>這條不會再重試，請看 Actions 日誌。</i>")
+        # 單條跑完就把它從嘗試清單移除 —— 它已經有結果了，不需要再重試
+        attempts.pop(str(item["uid"]), None)
+
+    # ── 第三階段：全部跑完，位移才推進 ──
+    # 順序很重要：位移若在執行前就推進，job 中途掛掉那條指令就永久消失了。
+    # 反過來（跑完才推進）最壞情況只是重跑一次，而所有指令都是冪等的：
+    # /disable 第二次會說「已經是停用中」、/remove 第二次會說「找不到帳號」。
+    _save_state(highest, attempts)
+    if not history.commit_and_push(
+        "chore(e5keeper): 更新 Telegram 指令位移",
+        ["state"],
+        rewrite=lambda: _save_state(highest, attempts),
+    ):
+        log("位移沒能存回 repo，下一輪可能會重跑同一條指令（指令是冪等的，影響有限）",
+            level="warn")
     return 0
 
 
-def _dispatch(settings: Settings, cmd: str, argv: list[str], sender: str) -> None:
+def _waited_seconds(sent_at: int) -> int:
+    """這條指令從你按下送出到現在等了多久。"""
+    if not sent_at:
+        return 0
+    import time
+
+    return max(0, int(time.time()) - sent_at)
+
+
+def _dispatch(settings: Settings, cmd: str, argv: list[str], sender: str,
+              waited: int = 0) -> None:
     if cmd in ("help", "start"):
         send_text(settings, HELP)
         return
@@ -217,13 +298,14 @@ def _dispatch(settings: Settings, cmd: str, argv: list[str], sender: str) -> Non
         return
 
     if cmd in ("test", "check", "run"):
-        _run_command(settings, cmd, argv, sender)
+        _run_command(settings, cmd, argv, sender, waited)
         return
 
     send_text(settings, f"❓ 不認識的指令 <code>/{e(cmd)}</code>\n\n{HELP}")
 
 
-def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str) -> None:
+def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str,
+                 waited: int = 0) -> None:
     from . import accounts as acct
 
     key = (argv[0] if argv else "all").strip()
@@ -265,7 +347,9 @@ def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str) -> 
     }[cmd]
     if category:
         banner += f"\n類別：<code>{e(category)}</code>"
-    banner += f"\n請稍候，跑完會把完整結果送過來…"
+    if waited >= 60:
+        banner += f"\n⏱️ 這條指令等了 {waited // 60} 分 {waited % 60} 秒才被收到"
+    banner += "\n請稍候，跑完會把完整結果送過來…"
     send_text(settings, banner)
 
     section(f"Telegram 指令 /{cmd} · {who}")
