@@ -1,0 +1,85 @@
+name: 👥 帳號管理
+
+# 列出、停用、啟用、移除、改名。
+#
+# 為什麼需要這個：GitHub Secret 是寫得進去、讀不回來的，
+# 所以你沒辦法在網頁上手動編輯 E5_ACCOUNTS 只改其中一個帳號 ——
+# 打開來看不到內容，改了等於整包重寫，所有帳號都要重新授權。
+# 這個 workflow 由程式讀出解密後的清單、改完再寫回去，就能單獨處理一個帳號。
+#
+# 同樣的事情也可以直接在 Telegram 下指令完成（/list /disable /enable /rename /remove），
+# 這個 workflow 是給「Telegram 不方便用」或「想留下 Actions 紀錄」時用的。
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: '要做什麼'
+        required: true
+        default: list
+        type: choice
+        options:
+          - list      # 列出所有帳號
+          - disable   # 暫停保活，但保留 token
+          - enable    # 恢復保活
+          - rename    # 改顯示名稱
+          - remove    # 移除帳號（不可復原）
+      account:
+        description: '哪個帳號（別名 / email / 序號）。list 不用填'
+        required: false
+        default: ''
+        type: string
+      new_alias:
+        description: '新別名（只有 rename 要填）'
+        required: false
+        default: ''
+        type: string
+      confirm:
+        description: '確認執行（remove、以及停用最後一個帳號時必須勾選）'
+        required: false
+        default: false
+        type: boolean
+
+# 只讀就好：這個 workflow 不寫 repo，只改 Secret（靠 GH_PAT）
+permissions:
+  contents: read
+
+concurrency:
+  group: e5keeper-accounts
+  cancel-in-progress: false
+
+jobs:
+  manage:
+    name: 帳號管理
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 安裝 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安裝相依套件
+        run: pip install --quiet -r requirements.txt
+
+      - name: 執行
+        env:
+          E5_ACCOUNTS: ${{ secrets.E5_ACCOUNTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          IN_ACTION: ${{ github.event.inputs.action }}
+          IN_ACCOUNT: ${{ github.event.inputs.account }}
+          IN_NEW_ALIAS: ${{ github.event.inputs.new_alias }}
+          IN_CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          set -euo pipefail
+          ARGS=(accounts --action "${IN_ACTION:-list}")
+          if [ -n "${IN_ACCOUNT:-}" ];   then ARGS+=(--account "$IN_ACCOUNT"); fi
+          if [ -n "${IN_NEW_ALIAS:-}" ]; then ARGS+=(--new-alias "$IN_NEW_ALIAS"); fi
+          if [ "${IN_CONFIRM:-false}" = "true" ]; then ARGS+=(--confirm); fi
+          python -m e5keeper "${ARGS[@]}"
