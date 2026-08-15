@@ -27,17 +27,28 @@ OFFSET_FILE = STATE_DIR / "telegram_offset.json"
 
 HELP = """🤖 <b>E5 保活精靈 · 指令說明</b>
 
-<code>/test all</code>　　跑<b>全部</b>帳號的<b>全部</b> API（測試模式）
+<b>執行</b>
+<code>/test all</code>　跑<b>全部</b>帳號的<b>全部</b> API（測試模式）
 <code>/test 主帳號</code>　只跑指定帳號的全部 API
 <code>/test 主帳號 mail</code>　只測該帳號的郵件類 API
-<code>/check all</code>　只驗證 token 與權限，不實際呼叫（dry-run）
-<code>/run</code>　　　立刻執行一次正常保活（隨機抽 API）
-<code>/status</code>　　看最後一次執行結果
-<code>/list</code>　　　列出所有帳號
-<code>/report</code>　　立刻產生一份統計報告
-<code>/help</code>　　　顯示這則說明
+<code>/check all</code>　只驗證 token 與權限，不實際呼叫
+<code>/run</code>　立刻執行一次正常保活（隨機抽 API）
 
-<i>指令最多 5 分鐘內會被處理（輪詢間隔）。</i>"""
+<b>帳號管理</b>
+<code>/list</code>　列出所有帳號與啟用狀態
+<code>/disable 主帳號</code>　暫停保活，但保留 token
+<code>/enable 主帳號</code>　恢復保活
+<code>/rename 舊別名 新別名</code>　改顯示名稱
+<code>/remove 主帳號 confirm</code>　移除帳號（<b>不可復原</b>）
+
+<b>查詢</b>
+<code>/status</code>　看最後一次執行結果
+<code>/report</code>　立刻產生一份統計報告
+<code>/ping</code>　確認精靈還活著
+<code>/help</code>　顯示這則說明
+
+<i>帳號可以用別名、email 或清單上的序號指定。
+指令最多 5 分鐘內會被處理（輪詢間隔）。</i>"""
 
 
 # ══════════════════ offset 狀態 ══════════════════
@@ -184,8 +195,15 @@ def _dispatch(settings: Settings, cmd: str, argv: list[str], sender: str) -> Non
         send_text(settings, f"🏓 pong　<i>{e(fmt_time(now_local(settings.tz)))}</i>")
         return
 
-    if cmd == "list":
-        send_text(settings, _account_list(settings))
+    if cmd in ("list", "enable", "disable", "remove", "rename"):
+        from . import accounts as acct
+
+        # /rename 舊別名 新別名　／　/remove 別名 confirm
+        target = argv[0] if argv else ""
+        new_alias = argv[1] if (cmd == "rename" and len(argv) > 1) else ""
+        confirm = any(a.lower() in ("confirm", "確定", "yes") for a in argv[1:])
+        _, message = acct.apply_action(settings, cmd, target, new_alias, confirm)
+        send_text(settings, message)
         return
 
     if cmd == "status":
@@ -206,6 +224,8 @@ def _dispatch(settings: Settings, cmd: str, argv: list[str], sender: str) -> Non
 
 
 def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str) -> None:
+    from . import accounts as acct
+
     key = (argv[0] if argv else "all").strip()
     category = argv[1].lower() if len(argv) > 1 else ""
     valid_cats = set(settings.categories)
@@ -229,7 +249,7 @@ def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str) -> 
             acc = settings.find_account(key)
             if acc is None:
                 send_text(settings, f"❌ 找不到帳號 <code>{e(key)}</code>\n\n"
-                                    + _account_list(settings))
+                                    + acct.render_list(settings, "可用的帳號"))
                 return
             targets = [acc]
             who = acc.alias
@@ -264,20 +284,6 @@ def _run_command(settings: Settings, cmd: str, argv: list[str], sender: str) -> 
 
 
 # ══════════════════ 查詢類指令 ══════════════════
-
-def _account_list(settings: Settings) -> str:
-    mask = settings.notify.get("mask_email", True)
-    rows = []
-    for i, a in enumerate(settings.accounts, 1):
-        flag = "🟢" if a.enabled else "⚪"
-        mode = "委派" if a.mode == "delegated" else "應用"
-        rows.append(f"{flag} {i}. {a.alias}  [{mode}]  {mask_email(a.email, mask)}")
-    return (
-        "👥 <b>帳號清單</b>\n"
-        + "<pre>" + e("\n".join(rows)) + "</pre>\n"
-        + "<i>用 /test &lt;別名或序號&gt; 測試單一帳號</i>"
-    )
-
 
 def _last_status(settings: Settings) -> str:
     entries = history.load_entries(days=30)
