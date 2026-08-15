@@ -83,6 +83,7 @@ class RunReport:
     accounts: list[AccountRun] = field(default_factory=list)
     note: str = ""
     secret_note: str = ""        # refresh token 回寫結果（有輪換時才會有值）
+    health_note: str = ""        # 指令通道健康檢查（有異常時才會有值）
 
     @property
     def all_healthy(self) -> bool:
