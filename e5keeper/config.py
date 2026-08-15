@@ -64,8 +64,9 @@ DEFAULT_SCOPES = [
     "Sites.Read.All",
     "Team.ReadBasic.All",
     "Directory.Read.All",
-    "Team.ReadBasic.All",
-    "Directory.Read.All",
+    # 下面兩個是選用的。Azure 沒加對應權限的話，
+    # dir.authmethods 與 dir.report.* 會顯示 ⚠️ 403，不影響保活。
+    # Reports.Read.All 除了權限之外，帳號還要有 Entra 管理員角色才讀得到。
     "UserAuthenticationMethod.Read",
     "Reports.Read.All",
 ]
@@ -209,6 +210,11 @@ def parse_accounts(raw_json: str) -> list[Account]:
         data = [data]
     if not isinstance(data, list):
         raise ValueError("E5_ACCOUNTS 必須是 JSON 陣列，例如 [ {...}, {...} ]")
+    if not data:
+        # 明確的空陣列是合法狀態（例如帳號被 /remove 光了），
+        # 跟「Secret 根本沒設」不一樣，後者在上面就已經擋掉了。
+        log("E5_ACCOUNTS 是空陣列，目前沒有任何帳號", level="warn")
+        return []
 
     accounts: list[Account] = []
     for i, item in enumerate(data):
@@ -252,8 +258,6 @@ def parse_accounts(raw_json: str) -> list[Account]:
         gh_add_mask(acc.refresh_token, acc.client_secret, acc.email)
         accounts.append(acc)
 
-    if not accounts:
-        raise ValueError("E5_ACCOUNTS 裡沒有任何帳號")
     return accounts
 
 
