@@ -54,6 +54,9 @@ def _finish(settings: Settings, report: RunReport) -> int:
                 f"但建議設定 PAT 讓它自動保存。"
             )
 
+    if report.mode == "schedule":
+        report.health_note = _poller_health()
+
     section("送出通知")
     notify.send_report(settings, report)
 
@@ -73,6 +76,50 @@ def _finish(settings: Settings, report: RunReport) -> int:
         log("所有帳號都無法取得 token，請重新授權", level="err")
         return 1
     return 0
+
+
+def _poller_health(stale_hours: int = 2) -> str:
+    """確認 Telegram 指令通道還活著。回傳要附在通知裡的警告（正常則回空字串）。
+
+    輪詢 workflow 是靠 GitHub 排程觸發的，而排程可能被停用、可能每次都失敗 ——
+    這兩種情況下你都不會收到任何通知，只會納悶「指令怎麼都沒反應」。
+    保活一天跑 3 次，順手查一下最後一次輪詢的狀況，成本是一次 API 呼叫。
+    """
+    if not os.environ.get("GITHUB_ACTIONS"):
+        return ""
+
+    from datetime import datetime, timezone
+
+    from . import gitapi
+    from .utils import parse_iso
+
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    token, _ = gitapi.pick_token()
+    if not repo or not token:
+        return ""
+
+    conclusion, when = gitapi.last_workflow_run(token, repo, "telegram-poller.yml")
+    if not conclusion:
+        return ""
+    if conclusion == "none":
+        return ("🤖 <b>指令通道從來沒執行過</b>　"
+                "「🤖 Telegram 指令輪詢」可能被停用了，Telegram 指令不會有反應。")
+
+    if conclusion not in ("success", "in_progress", "queued"):
+        return (f"🤖 <b>指令通道最後一次執行失敗</b>（<code>{notify.e(conclusion)}</code>）　"
+                f"Telegram 指令目前可能沒反應，請看 Actions 日誌。")
+
+    dt = parse_iso(when)
+    if dt is None:
+        return ""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
+    if hours > stale_hours:
+        return (f"🤖 <b>指令通道已經 {hours:.0f} 小時沒有執行了</b>　"
+                f"排程可能被 GitHub 停用，Telegram 指令不會有反應。"
+                f"到 Actions 手動跑一次「🤖 Telegram 指令輪詢」就會恢復。")
+    return ""
 
 
 def _job_summary(settings: Settings, report: RunReport) -> None:
@@ -213,7 +260,21 @@ def cmd_accounts(args) -> int:
 def cmd_poll(_args) -> int:
     from .telegram_poll import poll
 
-    settings = load_settings()
+    # 這裡刻意用 allow_empty_accounts。指令通道是你「發現東西壞掉」的管道，
+    # 它不能因為帳號設定壞了就一起死 —— 否則你連 /list、/help 都問不到，
+    # 也就無從得知到底哪裡出問題。帳號有問題時，個別指令自己會回報。
+    try:
+        settings = load_settings(allow_empty_accounts=True)
+    except ValueError as exc:
+        # 帳號 JSON 壞掉了。還是要盡量把指令通道撐起來，至少讓你問得到狀況。
+        log(f"帳號設定有問題：{exc}", level="err")
+        settings = load_settings(allow_empty_accounts=True, skip_accounts=True)
+        from .notify import e as esc, send_text
+        send_text(settings, f"🚨 <b>E5_ACCOUNTS 設定有問題</b>\n"
+                            f"<code>{esc(str(exc))}</code>\n\n"
+                            f"保活目前是停擺的。指令通道還活著，"
+                            f"但 /test、/run 這類需要帳號的指令會失敗。\n"
+                            f"請用「🔑 授權帳號」workflow 重新建立帳號。")
     return poll(settings)
 
 
