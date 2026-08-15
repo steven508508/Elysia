@@ -102,6 +102,67 @@ def _stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
+# ── 讓寫入的東西不要一眼就看出是機器產生的 ──────────────────
+#
+# 說明白：沒有證據顯示微軟會去讀檔案內容來判斷你是不是真的在用，
+# 所以這一段對「續訂機率」的實際幫助我判斷接近零。做它的理由是
+# 「固定 52 bytes、每個物件都叫 E5Keeper」實在太好認 —— 成本很低，
+# 那就不要留這麼明顯的指紋。
+#
+# 東西都會在建立後刪掉；萬一刪除失敗，通知裡會附上確切名稱讓你手動清。
+
+_NAME_WORDS = ("note", "notes", "draft", "memo", "scratch", "temp",
+               "log", "todo", "idea", "list")
+_EXTENSIONS = (".txt", ".md", ".log")
+
+_LINES = (
+    "Follow up on the pending items from last week.",
+    "Check quota usage before the end of the month.",
+    "Reminder: review the shared folder permissions.",
+    "Draft outline - to be expanded later.",
+    "No action needed, keeping this for reference.",
+    "Moved from the old notes file.",
+    "Items to revisit:",
+    "  - review",
+    "  - confirm",
+    "  - archive",
+    "Notes from the sync.",
+    "Placeholder, will update.",
+    "",
+)
+
+
+def _filename() -> str:
+    """隨機檔名，不帶任何工具名稱。"""
+    word = random.choice(_NAME_WORDS)
+    stamp = datetime.now(timezone.utc).strftime(
+        random.choice(("%Y-%m-%d", "%Y%m%d", "%m%d"))
+    )
+    return f"{word}-{stamp}-{_rand(4)}{random.choice(_EXTENSIONS)}"
+
+
+def _note_content() -> bytes:
+    """隨機長度的純文字內容。大小從幾百 bytes 到幾 KB 不等。"""
+    body = [datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M"), ""]
+    body += [random.choice(_LINES) for _ in range(random.randint(3, 40))]
+    if random.random() < 0.5:
+        body.append(_rand(random.randint(8, 64)))
+    return ("\n".join(body) + "\n").encode("utf-8")
+
+
+def _title(kind: str) -> str:
+    """給郵件主旨、行事曆事件、待辦清單用的中性標題。"""
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return {
+        "draft": random.choice((f"Notes {stamp}", f"Draft {stamp}", f"Follow up {stamp}")),
+        "mail": random.choice((f"Note to self {stamp}", f"Reminder {stamp}",
+                               f"Checklist {stamp}")),
+        "event": random.choice((f"Reminder {stamp}", f"Placeholder {stamp}",
+                                f"Follow up {stamp}")),
+        "todo": random.choice((f"Notes {stamp}", f"Later {stamp}", f"Ideas {stamp}")),
+    }[kind] + f" ({_rand(4)})"
+
+
 def _cycle(
     client: GraphClient,
     result: ApiResult,
@@ -145,12 +206,14 @@ def _cycle(
 
 
 def w_drive_file(client: GraphClient, result: ApiResult) -> None:
-    name = f"e5keeper-{_stamp()}-{_rand()}.txt"
-    content = f"E5 keepalive probe {datetime.now(timezone.utc).isoformat()}\n"
-    path = f"{{u}}/drive/root:/E5Keeper/{name}:/content"
+    name = _filename()
+    content = _note_content()
+    # 直接放根目錄。原本會建一個 E5Keeper 子資料夾，但程式只刪檔案不刪資料夾，
+    # 那個資料夾就會永遠留在雲端硬碟裡 —— 比檔案內容更容易被一眼認出來。
+    path = f"{{u}}/drive/root:/{name}:/content"
     status, payload, error, elapsed, attempts = client.request(
         "PUT", path,
-        data=content.encode("utf-8"),
+        data=content,
         headers={"Content-Type": "text/plain"},
     )
     result.status = status
@@ -179,7 +242,7 @@ def w_drive_file(client: GraphClient, result: ApiResult) -> None:
 
 
 def w_drive_folder(client: GraphClient, result: ApiResult) -> None:
-    name = f"e5k-{_stamp()}-{_rand(4)}"
+    name = f"{random.choice(_NAME_WORDS)}-{_stamp()[:6]}-{_rand(4)}"
     _cycle(
         client, result,
         create=("POST", "{u}/drive/root/children", {
@@ -196,8 +259,9 @@ def w_mail_draft(client: GraphClient, result: ApiResult) -> None:
     _cycle(
         client, result,
         create=("POST", "{u}/messages", {
-            "subject": f"[E5Keeper] 保活草稿 {_stamp()}",
-            "body": {"contentType": "Text", "content": "自動產生的保活草稿，建立後隨即刪除。"},
+            "subject": _title("draft"),
+            "body": {"contentType": "Text",
+                     "content": _note_content().decode("utf-8")},
             "toRecipients": [],
         }),
         delete_path=lambda o: f"{{u}}/messages/{o['id']}",
@@ -211,7 +275,7 @@ def w_calendar_event(client: GraphClient, result: ApiResult) -> None:
     _cycle(
         client, result,
         create=("POST", "{u}/events", {
-            "subject": f"[E5Keeper] 保活事件 {_stamp()}",
+            "subject": _title("event"),
             "start": {"dateTime": start.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "UTC"},
             "end": {"dateTime": end.strftime("%Y-%m-%dT%H:%M:%S"), "timeZone": "UTC"},
             "isReminderOn": False,
@@ -225,9 +289,10 @@ def w_contact(client: GraphClient, result: ApiResult) -> None:
     _cycle(
         client, result,
         create=("POST", "{u}/contacts", {
-            "givenName": "E5Keeper",
-            "surname": _rand(5),
-            "emailAddresses": [{"address": f"probe-{_rand()}@example.invalid", "name": "E5Keeper Probe"}],
+            "givenName": random.choice(("Alex", "Sam", "Jordan", "Chris", "Robin")),
+            "surname": _rand(6).capitalize(),
+            "emailAddresses": [{"address": f"{_rand(8)}@example.invalid",
+                                "name": "Contact"}],
         }),
         delete_path=lambda o: f"{{u}}/contacts/{o['id']}",
         label=lambda o: f"已建聯絡人 {truncate(o.get('displayName', ''), 24)}",
@@ -237,7 +302,7 @@ def w_contact(client: GraphClient, result: ApiResult) -> None:
 def w_todo_list(client: GraphClient, result: ApiResult) -> None:
     _cycle(
         client, result,
-        create=("POST", "{u}/todo/lists", {"displayName": f"E5Keeper {_stamp()}"}),
+        create=("POST", "{u}/todo/lists", {"displayName": _title("todo")}),
         delete_path=lambda o: f"{{u}}/todo/lists/{o['id']}",
         label=lambda o: f"已建待辦清單 {truncate(o.get('displayName', ''), 22)}",
     )
@@ -252,10 +317,10 @@ def w_send_self(client: GraphClient, result: ApiResult) -> None:
         return
     body = {
         "message": {
-            "subject": f"[E5Keeper] 保活訊號 {_stamp()}",
+            "subject": _title("mail"),
             "body": {
                 "contentType": "Text",
-                "content": "這是 E5 保活精靈自動寄出的保活郵件，可直接刪除。",
+                "content": _note_content().decode("utf-8"),
             },
             "toRecipients": [{"emailAddress": {"address": target}}],
         },
