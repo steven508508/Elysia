@@ -95,6 +95,35 @@ def whoami(token: str, timeout: int = 20) -> str:
     return ""
 
 
+def last_workflow_run(
+    token: str, repo: str, workflow_file: str, timeout: int = 20
+) -> tuple[str, str]:
+    """查某個 workflow 最後一次執行的 (結論, 完成時間)。
+
+    用來確認「指令通道還活著嗎」。輪詢 workflow 是靠 GitHub 排程觸發的，
+    而排程可能被停用、可能因為額度或設定錯誤而每次失敗 ——
+    這些情況下你不會收到任何通知，只會覺得「指令怎麼沒反應」。
+    保活執行時順手查一下，掛了就在通知裡講。
+    """
+    try:
+        resp = requests.get(
+            f"{REST}/repos/{repo}/actions/workflows/{workflow_file}/runs",
+            headers=_headers(token),
+            params={"per_page": 1, "exclude_pull_requests": "true"},
+            timeout=timeout,
+        )
+        if not resp.ok:
+            return "", ""
+        runs = (resp.json() or {}).get("workflow_runs") or []
+        if not runs:
+            return "none", ""
+        run = runs[0]
+        return (run.get("conclusion") or run.get("status") or "",
+                run.get("updated_at") or run.get("created_at") or "")
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return "", ""
+
+
 def get_head_oid(token: str, repo: str, branch: str, timeout: int = 30) -> str:
     """取得遠端分支目前的 HEAD commit SHA。"""
     try:
