@@ -1,1 +1,2 @@
 {"ts": "2026-08-15T02:52:24Z", "mode": "test", "trigger": "workflow_dispatch", "duration": 40.0, "run_id": "31860279799", "accounts": [{"alias": "E5-Csh", "token_ok": true, "rotated": true, "ok": 47, "warn": 5, "fail": 0, "total": 52, "duration": 40.0, "token_error": "", "fails": []}]}
+{"ts": "2026-08-15T03:21:35Z", "mode": "test", "trigger": "workflow_dispatch", "duration": 40.8, "run_id": "31861563365", "accounts": [{"alias": "E5-Csh", "token_ok": true, "rotated": true, "ok": 50, "warn": 2, "fail": 0, "total": 52, "duration": 40.8, "token_error": "", "fails": []}]}
