@@ -64,6 +64,10 @@ DEFAULT_SCOPES = [
     "Sites.Read.All",
     "Team.ReadBasic.All",
     "Directory.Read.All",
+    "Team.ReadBasic.All",
+    "Directory.Read.All",
+    "UserAuthenticationMethod.Read",
+    "Reports.Read.All",
 ]
 
 # Azure PowerShell 的公用 client id，沒有自建應用程式時可先拿來測試
