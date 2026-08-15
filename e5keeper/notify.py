@@ -108,6 +108,7 @@ def build_messages(settings, report: RunReport) -> list[str]:
     single = len(report.accounts) == 1
     prefix_len = len(header) + len(DIVIDER) + 2
     suffix_len = len(report.secret_note) + 1 if report.secret_note else 0
+    suffix_len += len(report.health_note) + 1 if report.health_note else 0
     if single:
         suffix_len += len(_job_link()) + 1
 
@@ -127,6 +128,8 @@ def build_messages(settings, report: RunReport) -> list[str]:
 
     if report.secret_note:
         messages[-1] += "\n" + report.secret_note
+    if report.health_note:
+        messages[-1] += "\n" + report.health_note
 
     return [m for m in _enforce_limit(messages) if m.strip()]
 
