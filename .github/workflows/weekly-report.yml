@@ -1,0 +1,51 @@
+name: 📈 E5 每週統計
+
+on:
+  # 每週一 09:30（台北時間），也就是 UTC 週一 01:30
+  schedule:
+    - cron: '30 1 * * 1'
+  workflow_dispatch:
+    inputs:
+      days:
+        description: '統計最近幾天'
+        required: false
+        default: '7'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  report:
+    name: 產生統計報告
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0      # 需要完整歷史才讀得到所有紀錄
+
+      - name: 安裝 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安裝相依套件
+        run: pip install --quiet -r requirements.txt
+
+      - name: 送出統計報告
+        env:
+          E5_ACCOUNTS: ${{ secrets.E5_ACCOUNTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          IN_DAYS: ${{ github.event.inputs.days }}
+        run: |
+          set -euo pipefail
+          DAYS="${IN_DAYS:-7}"
+          # 只接受純數字，避免奇怪的輸入
+          case "$DAYS" in
+            ''|*[!0-9]*) DAYS=7 ;;
+          esac
+          python -m e5keeper report --days "$DAYS"
