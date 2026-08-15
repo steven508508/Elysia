@@ -1,0 +1,91 @@
+name: 🧪 E5 測試模式
+
+# 三種觸發方式：
+#   1. 在 Actions 頁面點 "Run workflow"，填帳號即可
+#   2. Telegram 傳 /test 指令（由 telegram-poller.yml 就地執行，不走這裡）
+#   3. repository_dispatch API：
+#      curl -X POST https://api.github.com/repos/<你的帳號>/<repo>/dispatches \
+#        -H "Authorization: Bearer <PAT>" \
+#        -H "Accept: application/vnd.github+json" \
+#        -d '{"event_type":"e5-test","client_payload":{"account":"all","category":"","dry_run":false}}'
+
+on:
+  workflow_dispatch:
+    inputs:
+      account:
+        description: '帳號別名 / email / 序號，或填 all 測全部'
+        required: true
+        default: 'all'
+        type: string
+      category:
+        description: '只測某一類 API（全部 = 不限制）'
+        required: false
+        default: '全部'
+        type: choice
+        options:
+          - 全部
+          - mail
+          - files
+          - calendar
+          - directory
+      dry_run:
+        description: '只驗證 token 與權限，不實際呼叫 API'
+        required: false
+        default: false
+        type: boolean
+  repository_dispatch:
+    types: [e5-test]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: e5keeper-test
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: 立即測試
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: 取出程式碼
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: 安裝 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安裝相依套件
+        run: pip install --quiet -r requirements.txt
+
+      # 輸入值一律走環境變數，不直接內插進 shell 指令，避免特殊字元造成問題
+      - name: 執行測試
+        env:
+          E5_ACCOUNTS: ${{ secrets.E5_ACCOUNTS }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IN_ACCOUNT: ${{ github.event.inputs.account || github.event.client_payload.account }}
+          IN_CATEGORY: ${{ github.event.inputs.category || github.event.client_payload.category }}
+          IN_DRY: ${{ github.event.inputs.dry_run || github.event.client_payload.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          ACCOUNT="${IN_ACCOUNT:-all}"
+          ARGS=(test --account "$ACCOUNT" --trigger "$EVENT_NAME")
+
+          # 類別只接受白名單內的值，其餘一律忽略
+          case "${IN_CATEGORY:-}" in
+            mail|files|calendar|directory) ARGS+=(--category "$IN_CATEGORY") ;;
+            ""|全部) ;;
+            *) echo "::warning::忽略無效的類別「$IN_CATEGORY」" ;;
+          esac
+
+          if [ "${IN_DRY:-false}" = "true" ]; then ARGS+=(--dry-run); fi
+
+          echo "執行參數：${ARGS[*]}"
+          python -m e5keeper "${ARGS[@]}"
