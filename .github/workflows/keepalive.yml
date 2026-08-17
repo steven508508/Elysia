@@ -1,16 +1,27 @@
 name: 🛡️ E5 保活
 
 on:
-  # 一天 3 次，基準時間相隔 8 小時（UTC）。
-  # 程式啟動後還會再隨機等 0~50 分鐘（config.yml 的 random_delay_max_minutes），
-  # 所以每天實際執行時刻都不一樣，而兩次執行至少相隔 7 小時以上。
+  # 這裡是 8 個「候選」時段，不是每個都會執行。
   #
-  # 下面是 UTC 時間，換算成台北時間（UTC+8）分別是 09:23 / 17:47 / 01:11。
-  # 刻意避開整點，因為每天整點是 GitHub 排程最壅塞的時候，容易被延遲。
+  # 每天實際會跑幾次、跑哪幾班，由 config.yml 的 humanize 決定：
+  # 平日隨機挑 2~5 班、週末 1~3 班，組合由「日期 + repo 名稱」推導 ——
+  # 所以同一天的每一班都算得出同一份行程，而每天、每個人的行程都不同。
+  # 沒被選中的班次會在幾秒內結束，不會空等，也不會呼叫任何 Microsoft API。
+  #
+  # 被選中的班次還會再隨機等 0~30 分鐘才開始，所以連時刻都不固定。
+  #
+  # 下面是 UTC，換算台北時間依序是：
+  #   08:37  10:13  12:41  14:29  17:07  19:53  22:19  00:31
+  # 刻意全部避開整點與半點 —— 那是 GitHub 排程最壅塞、也最像機器的時間。
   schedule:
-    - cron: '23 1 * * *'
-    - cron: '47 9 * * *'
-    - cron: '11 17 * * *'
+    - cron: '37 0 * * *'
+    - cron: '13 2 * * *'
+    - cron: '41 4 * * *'
+    - cron: '29 6 * * *'
+    - cron: '7 9 * * *'
+    - cron: '53 11 * * *'
+    - cron: '19 14 * * *'
+    - cron: '31 16 * * *'
   workflow_dispatch:
 
 permissions:
@@ -27,12 +38,12 @@ jobs:
     timeout-minutes: 110      # 要涵蓋隨機等待 + 所有帳號跑完
     steps:
       - name: 取出程式碼
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
 
       - name: 安裝 Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          python-version: '3.11'
+          python-version: '3.13'
           cache: pip
 
       - name: 安裝相依套件
