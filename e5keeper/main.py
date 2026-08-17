@@ -167,7 +167,21 @@ def _job_summary(settings: Settings, report: RunReport) -> None:
 # ══════════════════ 各子指令 ══════════════════
 
 def cmd_run(args) -> int:
+    from . import humanize
+
     settings = load_settings()
+
+    # 今天這一班在不在行程裡？不在就直接結束，連隨機等待都不做。
+    # 手動觸發（workflow_dispatch）一律照跑。
+    if args.jitter and args.trigger == "schedule":
+        plan = humanize.describe(settings)
+        if plan:
+            log(plan)
+        go, why = humanize.should_run_now(settings)
+        log(why)
+        if not go:
+            log("這一班略過（每天執行次數是刻意變動的，不是故障）", level="ok")
+            return 0
 
     if args.jitter:
         max_min = int(settings.raw["schedule"].get("random_delay_max_minutes", 0) or 0)
