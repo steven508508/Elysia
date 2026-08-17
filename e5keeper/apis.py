@@ -191,6 +191,12 @@ def _cycle(
     result.summary = label(obj)
 
     if cleanup and delete_path is not None and obj.get("id"):
+        # 延後清除：東西留到本輪結束才刪，存活數分鐘而不是 0.9 秒。
+        # 「建立後立刻刪除」是整套流程裡最不像真人的動作。
+        if client.defer_cleanup:
+            client.pending_deletes.append((delete_path(obj), result.summary))
+            result.summary += " ⏳稍後清除"
+            return
         d_status, _, d_error, d_elapsed, _ = client.request("DELETE", delete_path(obj))
         result.elapsed += d_elapsed
         if 200 <= d_status < 300:
@@ -228,6 +234,11 @@ def w_drive_file(client: GraphClient, result: ApiResult) -> None:
     size = obj.get("size", len(content))
     result.summary = f"已上傳 {truncate(obj.get('name', name), 28)}（{size}B）"
     if client.cleanup_after_write and obj.get("id"):
+        if client.defer_cleanup:
+            client.pending_deletes.append(
+                (f"{{u}}/drive/items/{obj['id']}", result.summary))
+            result.summary += " ⏳稍後清除"
+            return
         d_status, _, d_error, d_elapsed, _ = client.request(
             "DELETE", f"{{u}}/drive/items/{obj['id']}"
         )
