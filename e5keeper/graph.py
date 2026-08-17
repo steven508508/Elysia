@@ -53,7 +53,9 @@ class GraphClient:
     access_token: str
     user_ref: str = "/me"
     self_address: str = ""            # 寄信給自己時的收件地址
-    cleanup_after_write: bool = True  # 寫入型操作完成後是否立刻刪除
+    cleanup_after_write: bool = True  # 寫入型操作完成後是否要刪除
+    defer_cleanup: bool = False       # True = 留到本輪結束才刪，而不是建完立刻刪
+    pending_deletes: list = field(default_factory=list)   # [(路徑, 顯示名稱), ...]
     timeout: int = 30
     max_attempts: int = 3
     initial_backoff: float = 2.0
