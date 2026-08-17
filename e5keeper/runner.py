@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
-from . import apis
+from . import apis, humanize
 from .auth import TokenError, acquire_token
 from .config import Account, Settings
 from .graph import ApiResult, GraphClient
@@ -185,6 +185,9 @@ def run_account(
         user_ref=account.user_ref,
         self_address=account.target_user or account.email,
         cleanup_after_write=bool(feat.get("cleanup_after_write", True)),
+        # 測試模式要立刻看到清除結果，所以不延後
+        defer_cleanup=bool(settings.humanize.get("deferred_cleanup", True))
+        and not test_mode and not dry_run,
         timeout=int(cfg_run["timeout_seconds"]),
         max_attempts=int(cfg_run["retry"]["max_attempts"]),
         initial_backoff=float(cfg_run["retry"]["initial_backoff"]),
@@ -207,10 +210,16 @@ def run_account(
         log("目前設定下沒有任何可用的 API", level="warn")
         return run
 
+    hcfg = settings.humanize
     if test_mode:
         selected = list(pool)          # 測試模式：全部都跑，不抽樣
     else:
         selected = apis.sample(pool, int(cfg_run["min_apis"]), int(cfg_run["max_apis"]))
+        # 真人會重新整理、會把同一個東西再點開一次
+        if len(selected) > 2 and humanize.roll(hcfg, "repeat_probability", 0.12):
+            again = random.choice(selected)
+            selected.insert(random.randint(1, len(selected)), again)
+            log(f"（本輪會重複開一次 {again.id}）", level="dim")
     run.planned = len(selected)
     log(f"本輪將呼叫 {len(selected)} / {len(pool)} 個 API"
         + ("（測試模式：全跑、不延遲）" if test_mode else ""))
@@ -239,14 +248,44 @@ def run_account(
             level="ok" if res.ok else ("warn" if res.tolerated else "err"))
 
         if not test_mode and i < len(selected):
-            jitter_sleep(cfg_run["api_delay_seconds"], label="API 間隔")
+            # 叢發式節奏：多數連續操作，偶爾停下來「看內容」，
+            # 偶爾整個離開一下。均勻分布反而最不像人。
+            wait = humanize.next_delay(hcfg, cfg_run["api_delay_seconds"])
+            if wait > 30:
+                log(f"暫停 {wait / 60:.1f} 分鐘", level="dim")
+            time.sleep(wait)
 
     # 4) 附帶資訊
     for res in run.results:
         if res.spec_id == "dir.me" and res.ok and res.summary:
             run.display_name = res.summary
 
-    if feat["subscription_reminder"] and not dry_run:
+    # 延後清除：把本輪建立的東西刪掉。它們已經存活了數分鐘而不是 0.9 秒。
+    if client.pending_deletes:
+        section(f"清除本輪建立的 {len(client.pending_deletes)} 個項目")
+        for path, label in client.pending_deletes:
+            if not test_mode:
+                time.sleep(humanize.next_delay(hcfg, cfg_run["api_delay_seconds"]))
+            d_status, _, d_error, _, _ = client.request("DELETE", path)
+            if 200 <= d_status < 300:
+                log(f"已清除 {label}", level="ok")
+            else:
+                log(f"清除失敗（{d_status}）：{label}", level="warn")
+                for res in run.results:
+                    if res.summary.startswith(label):
+                        res.ok, res.tolerated = False, True
+                        res.summary = res.summary.replace("⏳稍後清除",
+                                                          f"⚠清除失敗({d_status})")
+                        res.error = truncate(
+                            f"已建立但清除失敗({d_status})：{label}｜{d_error}", 110)
+                        break
+        for res in run.results:
+            res.summary = res.summary.replace("⏳稍後清除", "↺已清除")
+
+    # 訂閱查詢不必每次都做 —— 每次執行都在同一個位置打同一支 API 太固定了。
+    # 一天跑 2~5 次、每次 40% 機率，平均一天仍會查到 1~2 次。
+    if feat["subscription_reminder"] and not dry_run and (
+            test_mode or humanize.roll(hcfg, "subscription_check_probability", 0.4)):
         run.subscription = check_subscription(client)
         if run.subscription.days_left is not None:
             log(f"訂閱 {run.subscription.sku} 剩餘 {run.subscription.days_left} 天")
@@ -304,6 +343,9 @@ def run_all(
 
         if not test_mode and pos < total:
             jitter_sleep(settings.run["account_delay_seconds"], label="帳號間隔")
+            # 換帳號本來就是比較大的動作，額外再停一下
+            time.sleep(humanize.next_delay(settings.humanize,
+                                           settings.run["api_delay_seconds"]))
 
     report.duration = time.monotonic() - started
     return report
