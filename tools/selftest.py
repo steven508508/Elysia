@@ -154,10 +154,10 @@ class Handler(BaseHTTPRequestHandler):
         if method in ("POST", "PUT"):
             return self._send(201, {
                 "id": "ITEM-" + str(len(SENT) + 1),
-                "name": "e5keeper-probe.txt",
-                "subject": "[E5Keeper] 保活草稿",
-                "displayName": "E5Keeper Probe",
-                "size": 64,
+                "name": "notes-2026-08-15-x19q.md",
+                "subject": "Notes 2026-08-15 (8nd9)",
+                "displayName": "Alex Km2p4t",
+                "size": 614,
             })
 
         return self._send(200, {"value": [{"id": f"x{i}", "displayName": f"項目 {i}",
@@ -206,6 +206,10 @@ def main() -> int:
     settings.raw["run"]["api_delay_seconds"] = [0, 0]
     settings.raw["run"]["account_delay_seconds"] = [0, 0]
     settings.raw["run"]["retry"]["initial_backoff"] = 0.2
+    # 排程模式下訂閱查詢是機率性的（config 預設 40%）。這裡要驗證的是
+    # 「查到之後有沒有正確顯示」，不是機率本身，所以強制必查讓測試穩定。
+    # 機率邏輯本身由 selftest_humanize.py 負責。
+    settings.raw["humanize"]["subscription_check_probability"] = 1.0
 
     from e5keeper.runner import run_all
 
