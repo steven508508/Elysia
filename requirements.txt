@@ -1,12 +1,15 @@
-# 完整鎖定版本（含間接相依）。
+# 完整鎖定版本（含間接相依）。最後更新：2026-08，於 Python 3.13 驗證。
 #
 # 為什麼要鎖到這麼死：Telegram 輪詢每 5 分鐘就會重跑一次 pip install，
 # 而那個 job 的環境變數裡有 E5_ACCOUNTS（所有 refresh token 與 client secret）、
 # GH_PAT、TELEGRAM_BOT_TOKEN。任何一個套件被投毒，5 分鐘內就會被執行到，
 # 幾乎沒有察覺的時間。版本浮動 = 把這個風險敞開。
 #
-# 想更新版本時：把下面整段換成新的版本號，然後手動跑一次「🧪 E5 測試模式」確認正常。
-# 也建議開啟 .github/dependabot.yml（已附），讓 GitHub 自動幫你發更新 PR。
+# 鎖死不會讓它「未來跑不了」—— PyPI 不會刪掉已發布的版本，而 Python 版本
+# 也一併釘在 workflow 裡，所以這組合會一直裝得起來。真正需要留意的是
+# 安全性更新，那由 .github/dependabot.yml 每週自動發 PR 提醒。
+#
+# 手動更新版本時，記得跑一次「🧪 E5 測試模式」再合併。
 
 # 直接相依
 requests==2.34.2
@@ -16,7 +19,7 @@ PyNaCl==1.6.2
 # 間接相依（requests / PyNaCl 拉進來的）
 certifi==2026.7.22
 cffi==2.1.1
-charset-normalizer==3.5.0
+charset-normalizer==3.5.1
 idna==3.18
 pycparser==3.0
 urllib3==2.7.0
