@@ -17,7 +17,21 @@ CONFIG_PATH = ROOT / "config.yml"
 
 DEFAULTS: dict[str, Any] = {
     "timezone": "Asia/Taipei",
-    "schedule": {"random_delay_max_minutes": 50},
+    "humanize": {
+        "enabled": True,
+        "slots": ["00:37", "02:13", "04:41", "06:29", "09:07", "11:53", "14:19", "16:31"],
+        "runs_per_day": [2, 5],
+        "weekend_runs_per_day": [1, 3],
+        "burst_probability": 0.6,
+        "burst_delay": [0.3, 2],
+        "pause_delay": [5, 60],
+        "long_pause_probability": 0.08,
+        "long_pause_delay": [60, 240],
+        "deferred_cleanup": True,
+        "subscription_check_probability": 0.4,
+        "repeat_probability": 0.12,
+    },
+    "schedule": {"random_delay_max_minutes": 30},
     "run": {
         "min_apis": 8,
         "max_apis": 15,
@@ -150,6 +164,10 @@ class Settings:
     @property
     def run(self) -> dict:
         return self.raw["run"]
+
+    @property
+    def humanize(self) -> dict:
+        return self.raw.get("humanize") or {}
 
     @property
     def features(self) -> dict:
