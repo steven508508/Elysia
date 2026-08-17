@@ -400,6 +400,13 @@ def _commit_via_git(
             return False
 
         push = _git("push", "origin", f"HEAD:{branch}", check=False)
+        if push.returncode != 0:
+            # actions/checkout v6 起，認證資訊改存到 $RUNNER_TEMP 而不是 .git/config。
+            # 我們不想相依於它的內部做法，所以這裡自備一條路：
+            # 用 credential helper 從環境變數讀 token —— token 不會出現在
+            # 指令列（會被 ps 看到）也不會被寫進 .git/config。
+            push = _push_with_token(branch) or push
+
         if push.returncode == 0:
             log("已提交回 repo", level="ok")
             return True
@@ -424,6 +431,35 @@ def _commit_via_git(
 
     log("提交失敗，本次紀錄只保留在 Actions 日誌中", level="warn")
     return False
+
+
+def _push_with_token(branch: str):
+    """自備認證推送，不依賴 actions/checkout 幫我們留下的憑證。
+
+    token 透過環境變數交給 credential helper，所以不會出現在指令列
+    （`ps` 看得到）、也不會被寫進 .git/config（那會留在工作目錄裡）。
+    """
+    from . import gitapi
+
+    token, source = gitapi.pick_token()
+    repo = os.environ.get("GITHUB_REPOSITORY", "").strip()
+    if not token or not repo:
+        return None
+
+    log(f"改用 {source} 自備認證重試推送", level="warn")
+    env = dict(os.environ, GIT_PUSH_TOKEN=token)
+    helper = ('!f() { echo username=x-access-token; '
+              'echo password="$GIT_PUSH_TOKEN"; }; f')
+    try:
+        return subprocess.run(
+            ["git", "-c", f"credential.helper={helper}",
+             "push", f"https://github.com/{repo}", f"HEAD:{branch}"],
+            cwd=ROOT, env=env, check=False,
+            capture_output=True, text=True, timeout=120,
+        )
+    except Exception as exc:  # noqa: BLE001
+        log(f"自備認證推送失敗：{exc.__class__.__name__}", level="warn")
+        return None
 
 
 def _current_branch() -> str:
